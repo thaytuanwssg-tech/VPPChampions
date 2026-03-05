@@ -1,15 +1,15 @@
 const express = require('express');
-const fetch = require('node-fetch');
+const https = require('https');
 const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── API Route – gọi Claude AI ──
-app.post('/api/claude', async (req, res) => {
+app.post('/api/claude', (req, res) => {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return res.status(500).json({
@@ -17,22 +17,45 @@ app.post('/api/claude', async (req, res) => {
     });
   }
 
-  try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify(req.body),
-    });
+  const bodyStr = JSON.stringify(req.body);
+  const options = {
+    hostname: 'api.anthropic.com',
+    path: '/v1/messages',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(bodyStr),
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+  };
 
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (e) {
-    res.status(500).json({ error: { message: e.message } });
-  }
+  const apiReq = https.request(options, (apiRes) => {
+    let data = '';
+    apiRes.on('data', chunk => { data += chunk; });
+    apiRes.on('end', () => {
+      try {
+        res.status(apiRes.statusCode).json(JSON.parse(data));
+      } catch (e) {
+        res.status(500).json({ error: { message: 'Parse error: ' + e.message } });
+      }
+    });
+  });
+
+  apiReq.on('error', (e) => {
+    res.status(500).json({ error: { message: 'Lỗi kết nối: ' + e.message } });
+  });
+
+  apiReq.write(bodyStr);
+  apiReq.end();
+});
+
+// ── Health check – kiểm tra server & API key ──
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    apiKey: process.env.ANTHROPIC_API_KEY ? '✅ Đã cài' : '❌ Chưa cài'
+  });
 });
 
 // ── Fallback – trả về index.html ──
@@ -41,5 +64,6 @@ app.get('*', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`✅ VPP AI Champions đang chạy tại http://localhost:${PORT}`);
+  console.log(`✅ VPP AI Champions chạy tại http://localhost:${PORT}`);
+  console.log(`🔑 API Key: ${process.env.ANTHROPIC_API_KEY ? 'Đã cài ✅' : 'CHƯA CÀI ❌'}`);
 });
